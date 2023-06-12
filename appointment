@@ -1,3 +1,211 @@
+//scripted rest
+(function process(request, response) {
+    var requestBody = JSON.parse(request.body.dataString);
+    var location = requestBody.wireCenter;
+    var workType = requestBody.workType;
+    var searchWindowStart = requestBody.appointment.searchWindowStart;
+    var searchWindowEnd = requestBody.appointment.searchWindowEnd;
+    var latitude = requestBody.jobLocation.geoLocation.latitude;
+    var longitude = requestBody.jobLocation.geoLocation.longitude;
+    var street = requestBody.jobLocation.street;
+    var city = requestBody.jobLocation.city;
+    var state = requestBody.jobLocation.state;
+    var country = requestBody.jobLocation.country;
+    var zip = requestBody.jobLocation.zipCode;
+    var day = requestBody.appointmentType;
+    var startDate = new GlideDateTime(searchWindowStart.split('T')[0] + ' ' + searchWindowStart.split('T')[1]);
+    var startDateNew = searchWindowStart.split('T')[0];
+    var endDate = new GlideDateTime(searchWindowEnd.split('T')[0] + ' ' + searchWindowEnd.split('T')[1]);
+    var availableAgents = [];
+    var holidays = [];
+	var personalOff=[];
+    //check for duration not greater than 60days
+    var diffMilliseconds = endDate.getNumericValue() - startDate.getNumericValue();
+    var diffDays = Math.floor(diffMilliseconds / (1000 * 60 * 60 * 24));
+
+    if (diffDays > 60) {
+        var durationErrorMessage = "Duration should not be more than 60 days";
+        response.setStatus(403);
+        return durationErrorMessage;
+    }
+    //check for past date
+    var todayDateTime = new GlideDateTime();
+
+    if (startDate.compareTo(todayDateTime) < 0) {
+        var pastErrorMessage = 'Appointment window should not be in the past';
+
+        response.setStatus(403);
+        return pastErrorMessage;
+    }
+    //date validation
+    if (endDate <= startDate) {
+        var dateValidationError = 'End date should be greater than start date';
+
+        response.setStatus(403);
+        return dateValidationError;
+    }
+    var territoryGR = new GlideRecord('sn_tp_territory');
+    territoryGR.addQuery('name', location);
+    territoryGR.query();
+
+    if (territoryGR.next()) {
+        var territorySysID = territoryGR.getValue('sys_id');
+
+        var territoryMembershipGR = new GlideRecord('sn_tp_territory_membership_override');
+        territoryMembershipGR.addQuery('territory', territorySysID);
+        territoryMembershipGR.query();
+        var territoryUser = false;
+
+        while (territoryMembershipGR.next()) {
+            territoryUser = true;
+            var userSysID = territoryMembershipGR.getValue('user');
+
+            var skillGR = new GlideRecord('cmn_skill');
+            skillGR.addQuery('name', workType);
+            skillGR.query();
+            var skillFound = false;
+
+            while (skillGR.next()) {
+                var skillSysID = skillGR.getValue('sys_id');
+                skillFound = true;
+
+                var userSkillGR = new GlideRecord('sys_user_has_skill');
+                userSkillGR.addQuery('skill', skillSysID);
+                userSkillGR.addQuery('user', userSysID);
+                userSkillGR.query();
+
+                while (userSkillGR.next()) {
+                    var agentSysID = userSkillGR.getValue('user');
+
+                    var workScheduleGR = new GlideRecord('agent_work_schedule');
+                    workScheduleGR.addQuery('user', agentSysID);
+                    workScheduleGR.query();
+
+                    while (workScheduleGR.next()) {
+                        var work = workScheduleGR.getDisplayValue('work_schedule');
+
+                        var cmn = new GlideRecord('cmn_schedule');
+                        cmn.addQuery('name', work);
+                        cmn.query();
+
+                        while (cmn.next()) {
+                            var cmnsys = cmn.getValue('sys_id');
+
+                            var span = new GlideRecord('cmn_schedule_span');
+                            span.addQuery('schedule', cmnsys);
+                            span.query();
+
+                            if (span.next()) {
+                                var et = span.getDisplayValue('end_date_time').split(' ')[1];
+                                var st = span.getDisplayValue('start_date_time').split(' ')[1];
+
+                                var fromDate = new GlideDateTime(workScheduleGR.getValue('from_date') + ' ' + st);
+                                var toDate = new GlideDateTime(workScheduleGR.getValue('to_date') + ' ' + et);
+
+                                if (startDate.compareTo(fromDate) >= 0 && endDate.compareTo(toDate) <= 0) {
+                                    availableAgents.push(userSkillGR.getDisplayValue('user'));
+
+                                    var personal = new GlideRecord('agent_events');
+                                    personal.addQuery('user', agentSysID);
+                                    personal.query();
+
+                                    if (personal.next()) {
+                                        var personalSchedule = personal.getDisplayValue('personal_schedule');
+                                        var pscheduleCheck = new GlideRecord('cmn_schedule');
+                                        pscheduleCheck.addQuery('name', personalSchedule);
+                                        pscheduleCheck.query();
+
+                                        if (pscheduleCheck.next()) {
+                                            var psysid = pscheduleCheck.getValue('sys_id');
+
+                                            var getHoliday = new GlideRecord('cmn_schedule_span');
+                                            getHoliday.addQuery('schedule', psysid);
+                                            getHoliday.query();
+
+                                            while (getHoliday.next()) {
+                                                var endHolidayDate = new GlideDateTime(getHoliday.getDisplayValue('end_date_time'));
+                                                var startHolidayDate = new GlideDateTime(getHoliday.getDisplayValue('start_date_time'));
+
+                                                if (startHolidayDate.compareTo(startDate) <= 0 && endHolidayDate.compareTo(endDate) >= 0) {
+                                                    var userIndex = availableAgents.indexOf(userSkillGR.getDisplayValue('user'));
+													personalOff.push(userSkillGR.getDisplayValue('user'));
+													personalOff.push(startHolidayDate);
+													personalOff.push(endHolidayDate);
+													
+
+                                                    if (userIndex !== -1) {
+                                                        availableAgents.splice(userIndex, 1);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    var agentErr = 'No agent not found with this schedule in ServiceNow';
+
+                                    response.setStatus(403);
+                                    return agentErr;
+                                }
+
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!skillFound) {
+                var skillErr = 'No agents found with this skill in ServiceNow';
+                response.setStatus(403);
+                return skillErr;
+            }
+        }
+
+        if (!territoryUser) {
+            var territoryUserErr = 'No agents found with this Territory in ServiceNow';
+            response.setStatus(403);
+            return territoryUserErr;
+        }
+    } else {
+        var territoryErr = 'No territory found in ServiceNow';
+        response.setStatus(403);
+        return territoryErr;
+    }
+    // 	if (holidays.length > 0) {
+    //         var holidaysLine = holidays.join(', ');
+
+    //     }
+    if (availableAgents.length > 0) {
+        var agentsLine = availableAgents.join(', ');
+        gs.info('Available agents on schedule: ' + agentsLine);
+    } else {
+        gs.info('No agents available on schedule');
+    }
+
+    var appointmentScript = new sn_apptmnt_booking.appointmentApiUtil();
+    var getlocation = street + ',' + city + ',' + state + ',' + country + '' + zip;
+    //appointmentScript.getAddress(latitude, longitude);
+
+    var availableAppointments = appointmentScript.getAvailableAppointments(getlocation, startDate, endDate, availableAgents, day,personalOff); //holidays, startDateNew);
+
+    if (
+        !availableAppointments.result ||
+        availableAppointments.result.length === 0 ||
+        !availableAppointments.result[0].slots ||
+        availableAppointments.result[0].slots.length === 0
+    ) {
+        var appointmentErrorMessage =
+            'No appointments available between ' + startDate + ' and ' + endDate;
+        response.setStatus(403);
+        return appointmentErrorMessage;
+    } else {
+        response.setContentType('application/json');
+        var responseBody = {
+            availableAppointments: availableAppointments,
+        };
+        response.setBody(responseBody);
+    }
+})(request, response);
+//script include
 var appointmentApiUtil = Class.create();
 appointmentApiUtil.prototype = {
   initialize: function() {},

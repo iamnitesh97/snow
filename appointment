@@ -18,6 +18,7 @@
     var endDate = new GlideDateTime(searchWindowEnd.split('T')[0] + ' ' + searchWindowEnd.split('T')[1]);
     var availableAgents = [];
     var holidays = [];
+    var personalOff = [];
     //check for duration not greater than 60days
     var diffMilliseconds = endDate.getNumericValue() - startDate.getNumericValue();
     var diffDays = Math.floor(diffMilliseconds / (1000 * 60 * 60 * 24));
@@ -43,6 +44,12 @@
         response.setStatus(403);
         return dateValidationError;
     }
+	 var grServiceConfig = new GlideRecord('sn_apptmnt_booking_service_config');
+        grServiceConfig.addQuery('active', true);
+        grServiceConfig.addQuery('name', day);
+        grServiceConfig.query();
+	if (grServiceConfig.next()) {
+
     var territoryGR = new GlideRecord('sn_tp_territory');
     territoryGR.addQuery('name', location);
     territoryGR.query();
@@ -87,22 +94,23 @@
                         cmn.addQuery('name', work);
                         cmn.query();
 
-                        while (cmn.next()) {
+                        if (cmn.next()) {
                             var cmnsys = cmn.getValue('sys_id');
 
                             var span = new GlideRecord('cmn_schedule_span');
                             span.addQuery('schedule', cmnsys);
                             span.query();
 
-                            if (span.next()) {
+                            while(span.next()) {
                                 var et = span.getDisplayValue('end_date_time').split(' ')[1];
                                 var st = span.getDisplayValue('start_date_time').split(' ')[1];
 
                                 var fromDate = new GlideDateTime(workScheduleGR.getValue('from_date') + ' ' + st);
                                 var toDate = new GlideDateTime(workScheduleGR.getValue('to_date') + ' ' + et);
+								availableAgents.push(userSkillGR.getDisplayValue('user'));
 
                                 if (startDate.compareTo(fromDate) >= 0 && endDate.compareTo(toDate) <= 0) {
-                                    availableAgents.push(userSkillGR.getDisplayValue('user'));
+                                    
 
                                     var personal = new GlideRecord('agent_events');
                                     personal.addQuery('user', agentSysID);
@@ -124,9 +132,14 @@
                                             while (getHoliday.next()) {
                                                 var endHolidayDate = new GlideDateTime(getHoliday.getDisplayValue('end_date_time'));
                                                 var startHolidayDate = new GlideDateTime(getHoliday.getDisplayValue('start_date_time'));
+                                                personalOff.push(userSkillGR.getDisplayValue('user'));
+                                                personalOff.push(startHolidayDate);
+                                                personalOff.push(endHolidayDate);
 
                                                 if (startHolidayDate.compareTo(startDate) <= 0 && endHolidayDate.compareTo(endDate) >= 0) {
                                                     var userIndex = availableAgents.indexOf(userSkillGR.getDisplayValue('user'));
+
+
 
                                                     if (userIndex !== -1) {
                                                         availableAgents.splice(userIndex, 1);
@@ -140,6 +153,41 @@
 
                                     response.setStatus(403);
                                     return agentErr;
+                                }
+
+                            }
+
+                            var country_holiday = new GlideRecord('cmn_other_schedule');
+                            country_holiday.addQuery('schedule', cmnsys);
+                            country_holiday.query();
+                            while (country_holiday.next()) {
+                                var holiday_name = country_holiday.getDisplayValue('child_schedule');
+                                var hsys = country_holiday.getValue('child_schedule');
+                                // gs.info('holidAY ' + holiday_name + ' ' + hsys);
+                                var country_schedule = new GlideRecord('cmn_schedule');
+                                country_schedule.addQuery('name', holiday_name);
+                                country_schedule.query();
+                                if (country_schedule.next()) {
+
+                                    var countryHolidayDetails = new GlideRecord('cmn_schedule_span');
+                                    countryHolidayDetails.addQuery('schedule', hsys);
+                                    countryHolidayDetails.query();
+                                    if (countryHolidayDetails.next()) {
+                                        var countryHolidayStart = new GlideDateTime(countryHolidayDetails.getDisplayValue('start_date_time'));
+                                        var countryHolidayStartNew = countryHolidayDetails.getDisplayValue('start_date_time').split(' ')[0];
+                                        var countryHolidayEnd = new GlideDateTime(countryHolidayDetails.getDisplayValue('end_date_time'));
+                                        holidays.push(countryHolidayStart);
+
+                                        if (startDate.compareTo(countryHolidayStart) >= 0 && endDate.compareTo(countryHolidayEnd) <= 0) {
+
+                                            var countryErr = 'Appointment Slots are not avaiable due to ' + holiday_name;
+                                            response.setStatus(403);
+                                            return countryErr;
+
+                                        }
+
+                                    }
+
                                 }
 
                             }
@@ -165,6 +213,13 @@
         response.setStatus(403);
         return territoryErr;
     }
+	}
+	else{
+		var aErr = 'No appointment found in ServiceNow';
+        response.setStatus(403);
+        return aErr;
+		
+	}
     // 	if (holidays.length > 0) {
     //         var holidaysLine = holidays.join(', ');
 
@@ -180,7 +235,7 @@
     var getlocation = street + ',' + city + ',' + state + ',' + country + '' + zip;
     //appointmentScript.getAddress(latitude, longitude);
 
-    var availableAppointments = appointmentScript.getAvailableAppointments(getlocation, startDate, endDate, agentsLine, day); //holidays, startDateNew);
+    var availableAppointments = appointmentScript.getAvailableAppointments(getlocation, startDate, endDate, availableAgents, day, personalOff,holidays); //holidays, startDateNew);
 
     if (
         !availableAppointments.result ||
@@ -200,11 +255,11 @@
         response.setBody(responseBody);
     }
 })(request, response);
-//script include
+//script include'
 var appointmentApiUtil = Class.create();
 appointmentApiUtil.prototype = {
-        initialize: function() {},
-   getAvailableAppointments: function(location, startDate, endDate, agentsLine, day) {
+    initialize: function() {},
+    getAvailableAppointments: function(location, startDate, endDate, agentsLine, day, personalOff, holidays) {
         var grServiceConfig = new GlideRecord('sn_apptmnt_booking_service_config');
         grServiceConfig.addQuery('active', true);
         grServiceConfig.addQuery('name', day);
@@ -229,7 +284,7 @@ appointmentApiUtil.prototype = {
                 var currentDayOfWeek = currentDate.getDayOfWeekUTC().toString();
 
                 // Check if the current day is a bookable day
-                if (bookableDays.includes(currentDayOfWeek)) {
+                if (bookableDays.includes(currentDayOfWeek) && !this.isHoliday(currentDate, holidays)) {
                     var startDateTime = new GlideDateTime(currentDate.getValue());
                     startDateTime.setDisplayValue(currentDate.getValue().split(' ')[0] + ' ' + formatStart);
                     var endDateTime = new GlideDateTime(currentDate.getValue());
@@ -238,16 +293,6 @@ appointmentApiUtil.prototype = {
                     var currentDateTime = new GlideDateTime(startDateTime);
                     var availableAppointments = [];
                     var todayDateTime = new GlideDateTime();
-
-                    // if (startDateTime.compareTo(todayDateTime) < 0) {
-                    //     var errorMessage = 'Appointment window should not be in the past';
-                    //     var errorObject = {
-                    //         message: errorMessage,
-                    //         status: 403
-                    //     };
-                    //     response.setStatus(403);
-                    //     return errorObject;
-                    // }
 
                     while (currentDateTime.compareTo(endDateTime) <= 0) {
                         var currentStartTime = currentDateTime.getDisplayValue().split(' ')[1]; // Extract only the time portion
@@ -292,14 +337,27 @@ appointmentApiUtil.prototype = {
                         bookedAppointments.push(appointmentStart + '-' + appointmentEnd);
                     }
 
-                    if (availableAppointments && availableAppointments.length > 0) {
+                   if (availableAppointments && availableAppointments.length > 0) {
+                        // Filter agentsLine based on personalOff
+                        var filteredAgentsLine = agentsLine.filter(function(agent) {
+                            for (var i = 0; i < personalOff.length; i++) {
+                                if (
+                                    personalOff[i] === agent &&
+                                    currentDate.compareTo(new GlideDateTime(personalOff[i + 1])) >= 0 &&
+                                    currentDate.compareTo(new GlideDateTime(personalOff[i + 2])) <= 0
+                                ) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        });
+						if (filteredAgentsLine.length > 0) {
                         appointmentList.push({
                             date: 'Available Appointment Slots on ' + currentDate.getValue().split(' ')[0],
                             appointmentType: day,
                             newdate: ' ' + currentDate.getValue().split(' ')[0],
                             location: location,
-                            agent: agentsLine,
-                            // Add the location address to the response
+                            agent: filteredAgentsLine,
                             slots: availableAppointments.filter(function(slot) {
                                 var appointmentSlot = slot.startTime + '-' + slot.endTime;
                                 return (
@@ -309,17 +367,16 @@ appointmentApiUtil.prototype = {
                                 );
                             })
                         });
-                        anyAppointmentsFound = true;
+						  anyAppointmentsFound = true;
+						  }
+						  else {
+                    // No available agents, move to the next slot
+                    currentDate.addDaysLocalTime(1);
+                    continue;
+                }
                     } else {
                         // No available slots on the current date
                         var errorMessage = 'No available slots on ' + currentDate.getValue().split(' ')[0];
-                        // var errorObject = {
-                        //     message: errorMessage,
-                        //     status: 403
-                        // };
-                        // response.setStatus(403);
-                        // return errorObject;
-
                     }
                 }
 
@@ -336,24 +393,13 @@ appointmentApiUtil.prototype = {
                 return errorObjecte;
             }
 
-            //         if (appointmentList.length === 0) {
-            //       var errorMessagee = 'No appointments available between ' + startDate + ' and ' + endDate;
-            //       var errorObjecta = {
-            //           message: errorMessagee,
-            //           status: 403
-            //       };
-            //       response.setStatus(403);
-            //       return errorObjecta;
-            //   }
             var formattedResponse = {
                 result: appointmentList.map(function(appointment) {
                     return {
                         date: appointment.date,
                         appointmentType: appointment.appointmentType,
-                       // agents: appointment.agent,
                         location: appointment.location,
-                        availableAgents: agentsLine,
-                        // Include the location address in the response
+                        availableAgents: appointment.agent,
                         slots: appointment.slots.map(function(slot) {
                             return 'StartDateTime: ' + slot.startTime + ', EndDateTime: ' + slot.endTime;
                         })
@@ -370,8 +416,45 @@ appointmentApiUtil.prototype = {
                 }
             };
         }
+
     },
+    isHoliday: function(date, holidays) {
+        // Convert the date to the format used in the holidays array for comparison
+        var glideDate = new GlideDate();
+        glideDate.setValue(date.getDisplayValue().split(' ')[0]);
 
+        // Iterate over the holidays array and check if the current date is present
+        for (var i = 0; i < holidays.length; i++) {
+            var holiday = new GlideDate();
+            holiday.setValue(holidays[i]);
 
-                    type: 'appointmentApiUtil'
-                };
+            if (glideDate.equals(holiday)) {
+                return true; // The current date is a holiday
+            }
+        }
+
+        return false; // The current date is not a holiday
+    },
+    type: 'appointmentApiUtil'
+};
+//request body
+{
+    "workType": "BFGPONFFANRIN",
+    "wireCenter": "Fort Collins",
+    "appointmentType": "full-day",
+    "appointment": {
+        "searchWindowEnd": "2023-06-30T17:00:00",
+        "searchWindowStart": "2023-06-15T07:00:00"
+    },
+    "jobLocation": {
+        "city": "MANTEO",
+        "state": "NC",
+        "street": "174 JONES CIR",
+        "country": "USA",
+        "zipCode": "27954",
+        "geoLocation": {
+            "latitude": 41.256451,
+            "longitude": -71.994717
+        }
+    }
+}

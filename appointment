@@ -1,273 +1,17 @@
-//scripted rest
-(function process(request, response) {
-    var requestBody = JSON.parse(request.body.dataString);
-    var location = requestBody.wireCenter;
-    var workType = requestBody.workType;
-    var searchWindowStart = requestBody.appointment.searchWindowStart;
-    var searchWindowEnd = requestBody.appointment.searchWindowEnd;
-    var latitude = requestBody.jobLocation.geoLocation.latitude;
-    var longitude = requestBody.jobLocation.geoLocation.longitude;
-    var street = requestBody.jobLocation.street;
-    var city = requestBody.jobLocation.city;
-    var state = requestBody.jobLocation.state;
-    var country = requestBody.jobLocation.country;
-    var zip = requestBody.jobLocation.zipCode;
-    var day = requestBody.appointmentType;
-    var startDate = new GlideDateTime(searchWindowStart.split('T')[0] + ' ' + searchWindowStart.split('T')[1]);
-    var startDateNew = searchWindowStart.split('T')[0];
-    var endDate = new GlideDateTime(searchWindowEnd.split('T')[0] + ' ' + searchWindowEnd.split('T')[1]);
-    var availableAgents = [];
-    var holidays = [];
-    var personalOff = [];
-    //check for duration not greater than 60days
-    var diffMilliseconds = endDate.getNumericValue() - startDate.getNumericValue();
-    var diffDays = Math.floor(diffMilliseconds / (1000 * 60 * 60 * 24));
-
-    if (diffDays > 60) {
-        var durationErrorMessage = "Duration should not be more than 60 days";
-        response.setStatus(403);
-        return durationErrorMessage;
-    }
-    //check for past date
-    var todayDateTime = new GlideDateTime();
-
-    if (startDate.compareTo(todayDateTime) < 0) {
-        var pastErrorMessage = 'Appointment window should not be in the past';
-
-        response.setStatus(403);
-        return pastErrorMessage;
-    }
-    //date validation
-    if (endDate <= startDate) {
-        var dateValidationError = 'End date should be greater than start date';
-
-        response.setStatus(403);
-        return dateValidationError;
-    }
-	 var grServiceConfig = new GlideRecord('sn_apptmnt_booking_service_config');
-        grServiceConfig.addQuery('active', true);
-        grServiceConfig.addQuery('name', day);
-        grServiceConfig.query();
-	if (grServiceConfig.next()) {
-
-    var territoryGR = new GlideRecord('sn_tp_territory');
-    territoryGR.addQuery('name', location);
-    territoryGR.query();
-
-    if (territoryGR.next()) {
-        var territorySysID = territoryGR.getValue('sys_id');
-
-        var territoryMembershipGR = new GlideRecord('sn_tp_territory_membership_override');
-        territoryMembershipGR.addQuery('territory', territorySysID);
-        territoryMembershipGR.query();
-        var territoryUser = false;
-
-        while (territoryMembershipGR.next()) {
-            territoryUser = true;
-            var userSysID = territoryMembershipGR.getValue('user');
-
-            var skillGR = new GlideRecord('cmn_skill');
-            skillGR.addQuery('name', workType);
-            skillGR.query();
-            var skillFound = false;
-
-            while (skillGR.next()) {
-                var skillSysID = skillGR.getValue('sys_id');
-                skillFound = true;
-
-                var userSkillGR = new GlideRecord('sys_user_has_skill');
-                userSkillGR.addQuery('skill', skillSysID);
-                userSkillGR.addQuery('user', userSysID);
-                userSkillGR.query();
-
-                while (userSkillGR.next()) {
-                    var agentSysID = userSkillGR.getValue('user');
-
-                    var workScheduleGR = new GlideRecord('agent_work_schedule');
-                    workScheduleGR.addQuery('user', agentSysID);
-                    workScheduleGR.query();
-
-                    while (workScheduleGR.next()) {
-                        var work = workScheduleGR.getDisplayValue('work_schedule');
-
-                        var cmn = new GlideRecord('cmn_schedule');
-                        cmn.addQuery('name', work);
-                        cmn.query();
-
-                        if (cmn.next()) {
-                            var cmnsys = cmn.getValue('sys_id');
-
-                            var span = new GlideRecord('cmn_schedule_span');
-                            span.addQuery('schedule', cmnsys);
-                            span.query();
-
-                            while(span.next()) {
-                                var et = span.getDisplayValue('end_date_time').split(' ')[1];
-                                var st = span.getDisplayValue('start_date_time').split(' ')[1];
-
-                                var fromDate = new GlideDateTime(workScheduleGR.getValue('from_date') + ' ' + st);
-                                var toDate = new GlideDateTime(workScheduleGR.getValue('to_date') + ' ' + et);
-								availableAgents.push(userSkillGR.getDisplayValue('user'));
-
-                                if (startDate.compareTo(fromDate) >= 0 && endDate.compareTo(toDate) <= 0) {
-                                    
-
-                                    var personal = new GlideRecord('agent_events');
-                                    personal.addQuery('user', agentSysID);
-                                    personal.query();
-
-                                    if (personal.next()) {
-                                        var personalSchedule = personal.getDisplayValue('personal_schedule');
-                                        var pscheduleCheck = new GlideRecord('cmn_schedule');
-                                        pscheduleCheck.addQuery('name', personalSchedule);
-                                        pscheduleCheck.query();
-
-                                        if (pscheduleCheck.next()) {
-                                            var psysid = pscheduleCheck.getValue('sys_id');
-
-                                            var getHoliday = new GlideRecord('cmn_schedule_span');
-                                            getHoliday.addQuery('schedule', psysid);
-                                            getHoliday.query();
-
-                                            while (getHoliday.next()) {
-                                                var endHolidayDate = new GlideDateTime(getHoliday.getDisplayValue('end_date_time'));
-                                                var startHolidayDate = new GlideDateTime(getHoliday.getDisplayValue('start_date_time'));
-                                                personalOff.push(userSkillGR.getDisplayValue('user'));
-                                                personalOff.push(startHolidayDate);
-                                                personalOff.push(endHolidayDate);
-
-                                                if (startHolidayDate.compareTo(startDate) <= 0 && endHolidayDate.compareTo(endDate) >= 0) {
-                                                    var userIndex = availableAgents.indexOf(userSkillGR.getDisplayValue('user'));
-
-
-
-                                                    if (userIndex !== -1) {
-                                                        availableAgents.splice(userIndex, 1);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    var agentErr = 'No agent not found with this schedule in ServiceNow';
-
-                                    response.setStatus(403);
-                                    return agentErr;
-                                }
-
-                            }
-
-                            var country_holiday = new GlideRecord('cmn_other_schedule');
-                            country_holiday.addQuery('schedule', cmnsys);
-                            country_holiday.query();
-                            while (country_holiday.next()) {
-                                var holiday_name = country_holiday.getDisplayValue('child_schedule');
-                                var hsys = country_holiday.getValue('child_schedule');
-                                // gs.info('holidAY ' + holiday_name + ' ' + hsys);
-                                var country_schedule = new GlideRecord('cmn_schedule');
-                                country_schedule.addQuery('name', holiday_name);
-                                country_schedule.query();
-                                if (country_schedule.next()) {
-
-                                    var countryHolidayDetails = new GlideRecord('cmn_schedule_span');
-                                    countryHolidayDetails.addQuery('schedule', hsys);
-                                    countryHolidayDetails.query();
-                                    if (countryHolidayDetails.next()) {
-                                        var countryHolidayStart = new GlideDateTime(countryHolidayDetails.getDisplayValue('start_date_time'));
-                                        var countryHolidayStartNew = countryHolidayDetails.getDisplayValue('start_date_time').split(' ')[0];
-                                        var countryHolidayEnd = new GlideDateTime(countryHolidayDetails.getDisplayValue('end_date_time'));
-                                        holidays.push(countryHolidayStart);
-
-                                        if (startDate.compareTo(countryHolidayStart) >= 0 && endDate.compareTo(countryHolidayEnd) <= 0) {
-
-                                            var countryErr = 'Appointment Slots are not avaiable due to ' + holiday_name;
-                                            response.setStatus(403);
-                                            return countryErr;
-
-                                        }
-
-                                    }
-
-                                }
-
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!skillFound) {
-                var skillErr = 'No agents found with this skill in ServiceNow';
-                response.setStatus(403);
-                return skillErr;
-            }
-        }
-
-        if (!territoryUser) {
-            var territoryUserErr = 'No agents found with this Territory in ServiceNow';
-            response.setStatus(403);
-            return territoryUserErr;
-        }
-    } else {
-        var territoryErr = 'No territory found in ServiceNow';
-        response.setStatus(403);
-        return territoryErr;
-    }
-	}
-	else{
-		var aErr = 'No appointment found in ServiceNow';
-        response.setStatus(403);
-        return aErr;
-		
-	}
-    // 	if (holidays.length > 0) {
-    //         var holidaysLine = holidays.join(', ');
-
-    //     }
-    if (availableAgents.length > 0) {
-        var agentsLine = availableAgents.join(', ');
-        gs.info('Available agents on schedule: ' + agentsLine);
-    } else {
-        gs.info('No agents available on schedule');
-    }
-
-    var appointmentScript = new sn_apptmnt_booking.appointmentApiUtil();
-    var getlocation = street + ',' + city + ',' + state + ',' + country + '' + zip;
-    //appointmentScript.getAddress(latitude, longitude);
-
-    var availableAppointments = appointmentScript.getAvailableAppointments(getlocation, startDate, endDate, availableAgents, day, personalOff,holidays); //holidays, startDateNew);
-
-    if (
-        !availableAppointments.result ||
-        availableAppointments.result.length === 0 ||
-        !availableAppointments.result[0].slots ||
-        availableAppointments.result[0].slots.length === 0
-    ) {
-        var appointmentErrorMessage =
-            'No appointments available between ' + startDate + ' and ' + endDate;
-        response.setStatus(403);
-        return appointmentErrorMessage;
-    } else {
-        response.setContentType('application/json');
-        var responseBody = {
-            availableAppointments: availableAppointments,
-        };
-        response.setBody(responseBody);
-    }
-})(request, response);
-//script include'
 var appointmentApiUtil = Class.create();
 appointmentApiUtil.prototype = {
-    initialize: function() {},
-    getAvailableAppointments: function(location, startDate, endDate, agentsLine, day, personalOff, holidays) {
+    initialize: function() {
+        this.availableAgentsField = 'Available Agents';
+    },
+    getAvailableAppointments: function(location, startDate, endDate, agentsLine, day, personalOff, holidays, agentSchedules, offsetHours, territory, start, end) {
         var grServiceConfig = new GlideRecord('sn_apptmnt_booking_service_config');
         grServiceConfig.addQuery('active', true);
         grServiceConfig.addQuery('name', day);
         grServiceConfig.query();
 
         if (grServiceConfig.next()) {
-            var dailyStartTime = grServiceConfig.getValue('daily_start_time');
-            var dailyEndTime = grServiceConfig.getValue('daily_end_time');
+            var dailyStartTime = grServiceConfig.getDisplayValue('daily_start_time');
+            var dailyEndTime = grServiceConfig.getDisplayValue('daily_end_time');
             var appointmentDuration = grServiceConfig.getValue('appointment_duration') * 60;
             var bookableDays = grServiceConfig.getValue('bookable_days');
 
@@ -275,35 +19,47 @@ appointmentApiUtil.prototype = {
             var formatEnd = dailyEndTime + ':00';
 
             var appointmentList = [];
+
+            var filteredAgentsCount = 0;
             var anyAppointmentsFound = false;
 
             var currentDate = new GlideDateTime(startDate);
-            var timezoneOffset = currentDate.getTZOffset();
+            //var timezoneOffset = currentDate.getTZOffset();
 
             while (currentDate.compareTo(new GlideDateTime(endDate)) <= 0) {
                 var currentDayOfWeek = currentDate.getDayOfWeekUTC().toString();
 
                 // Check if the current day is a bookable day
                 if (bookableDays.includes(currentDayOfWeek) && !this.isHoliday(currentDate, holidays)) {
-                    var startDateTime = new GlideDateTime(currentDate.getValue());
+                    var startDateTime = new GlideDateTime(currentDate.getDisplayValue());
+                    //startDateTime.addSeconds(offsetHours*3600);
+
                     startDateTime.setDisplayValue(currentDate.getValue().split(' ')[0] + ' ' + formatStart);
-                    var endDateTime = new GlideDateTime(currentDate.getValue());
+                    var endDateTime = new GlideDateTime(currentDate.getDisplayValue());
+                    //endDateTime.addSeconds(offsetHours*3600);
+
+
                     endDateTime.setDisplayValue(currentDate.getValue().split(' ')[0] + ' ' + formatEnd);
 
                     var currentDateTime = new GlideDateTime(startDateTime);
+                    //currentDateTime.addSeconds(offsetHours*3600);
+
                     var availableAppointments = [];
                     var todayDateTime = new GlideDateTime();
 
                     while (currentDateTime.compareTo(endDateTime) <= 0) {
-                        var currentStartTime = currentDateTime.getDisplayValue().split(' ')[1]; // Extract only the time portion
+
+                        var currentStartTime = currentDateTime.getValue().split(' ')[1];
+
                         var currentEndTime = new GlideDateTime(currentDateTime);
                         currentEndTime.addSeconds(appointmentDuration);
-                        var formattedCurrentEndTime = currentEndTime.getDisplayValue().split(' ')[1]; // Extract only the time portion
 
-                        if (currentEndTime.compareTo(endDateTime) <= 0) { // Check if the current end time is less than or equal to the end time
+                        var formattedCurrentEndTime = currentEndTime.getValue().split(' ')[1];
+
+                        if (currentEndTime.compareTo(endDateTime) <= 0) {
                             var appointment = {
-                                startTime: currentDate.getValue().split(' ')[0] + ' ' + currentStartTime,
-                                endTime: currentDate.getValue().split(' ')[0] + ' ' + formattedCurrentEndTime,
+                                startTime: currentDateTime.getDisplayValue().replace(' ', 'T'),
+                                endTime: currentEndTime.getDisplayValue().replace(' ', 'T'),
                                 duration: grServiceConfig.getValue('appointment_duration') + ' minutes'
                             };
 
@@ -311,150 +67,451 @@ appointmentApiUtil.prototype = {
                         }
 
                         currentDateTime.addSeconds(appointmentDuration);
+
+
                     }
+                    var result = this.getBookedAppointments(territory, startDateTime, endDateTime, availableAppointments, offsetHours, day);
+                    var bookedAppointments = this.matchAndRemoveCorresponding4HourSlots(result.availableAppointments2HourSlots, result.bookedAppointments, availableAppointments, offsetHours);
+                    gs.error('kfc bAppointments ' + JSON.stringify(result.bookedAppointments));
+                    gs.error('kfc bookedAppointments ' + JSON.stringify(bookedAppointments));
+                    gs.error('kfc availableAppointments' + JSON.stringify(availableAppointments));
+                    gs.error('kfc availableAppointments2HourSlots' + JSON.stringify(result.availableAppointments2HourSlots));
 
-                    var grAppointment = new GlideRecord('sn_apptmnt_booking_appointment_booking');
-                    grAppointment.addQuery('start', '>=', startDateTime);
-                    grAppointment.addQuery('end', '<=', endDateTime);
-                    grAppointment.query();
-
-                    var bookedAppointments = [];
-
-                    while (grAppointment.next()) {
-                        var appointmentStart = grAppointment.start.getDisplayValue();
-                        var appointmentEnd = grAppointment.end.getDisplayValue();
-
-                        for (var i = availableAppointments.length - 1; i >= 0; i--) {
-                            var slotStart = availableAppointments[i].startTime;
-                            var slotEnd = availableAppointments[i].endTime;
-
-                            if (slotStart === appointmentStart && slotEnd === appointmentEnd) {
-                                availableAppointments.splice(i, 1);
-                                break;
-                            }
-                        }
-
-                        bookedAppointments.push(appointmentStart + '-' + appointmentEnd);
-                    }
-
-                   if (availableAppointments && availableAppointments.length > 0) {
-                        // Filter agentsLine based on personalOff
+                    if (availableAppointments && availableAppointments.length > 0) {
                         var filteredAgentsLine = agentsLine.filter(function(agent) {
-                            for (var i = 0; i < personalOff.length; i++) {
-                                if (
-                                    personalOff[i] === agent &&
-                                    currentDate.compareTo(new GlideDateTime(personalOff[i + 1])) >= 0 &&
-                                    currentDate.compareTo(new GlideDateTime(personalOff[i + 2])) <= 0
-                                ) {
-                                    return false;
-                                }
-                            }
-                            return true;
-                        });
-						if (filteredAgentsLine.length > 0) {
-                        appointmentList.push({
-                            date: 'Available Appointment Slots on ' + currentDate.getValue().split(' ')[0],
-                            appointmentType: day,
-                            newdate: ' ' + currentDate.getValue().split(' ')[0],
-                            location: location,
-                            agent: filteredAgentsLine,
-                            slots: availableAppointments.filter(function(slot) {
-                                var appointmentSlot = slot.startTime + '-' + slot.endTime;
+                            var isOnPersonalOff = personalOff.some(function(personal) {
                                 return (
-                                    bookedAppointments.indexOf(appointmentSlot) === -1 &&
-                                    slot.startTime >= startDate &&
-                                    slot.endTime <= endDate
+                                    personal.agent === agent &&
+                                    currentDate >= new GlideDateTime(personal.start) &&
+                                    currentDate <= new GlideDateTime(personal.end)
                                 );
-                            })
+                            });
+
+                            var isOnSchedule = agentSchedules.some(function(schedule) {
+                                return (
+                                    schedule.agent === agent &&
+                                    currentDate >= new GlideDateTime(schedule.start) &&
+                                    currentDate <= new GlideDateTime(schedule.end)
+                                );
+                            });
+
+                            return !isOnPersonalOff && isOnSchedule;
                         });
-						  anyAppointmentsFound = true;
-						  }
-						  else {
-                    // No available agents, move to the next slot
-                    currentDate.addDaysLocalTime(1);
-                    continue;
-                }
+
+                        if (filteredAgentsLine.length > 0) {
+                            var availableSlots = availableAppointments.filter(function(slot) {
+                                var appointmentSlotStart = new GlideDateTime(slot.startTime);
+                                var appointmentSlotEnd = new GlideDateTime(slot.endTime);
+
+                                return (
+                                    bookedAppointments.indexOf(slot.startTime + '-' + slot.endTime) === -1 &&
+                                    appointmentSlotStart.compareTo(start) >= 0 &&
+                                    appointmentSlotStart.compareTo(end) <= 0 &&
+                                    appointmentSlotEnd.compareTo(start) >= 0 &&
+                                    appointmentSlotEnd.compareTo(end) <= 0
+                                );
+                            });
+                            if (availableSlots.length > 0) {
+                                appointmentList.push({
+                                    date: 'Available Appointment Slots on ' + currentDate.getValue().split(' ')[0],
+                                    appointmentType: day,
+                                    newdate: ' ' + currentDate.getValue().split(' ')[0],
+                                    location: location,
+                                    slots: availableSlots.map(function(slot) {
+                                        var slotStart = new GlideDateTime(slot.startTime);
+                                        var slotEnd = new GlideDateTime(slot.endTime);
+
+                                        var slotAgents = [];
+                                        for (var i = 0; i < agentsLine.length; i++) {
+                                            slotAgents.push(agentsLine[i]);
+                                        }
+
+                                        // Check agent work schedule
+                                        for (var k = 0; k < agentSchedules.length; k++) {
+                                            var agentSchedule = agentSchedules[k];
+                                            var agentStart = new GlideDateTime(agentSchedule.start);
+                                            var agentEnd = new GlideDateTime(agentSchedule.end);
+
+                                            // Check if the slot falls within the agent's work schedule
+                                            if (
+                                                slotStart.compareTo(agentStart) >= 0 && // Slot starts on or after agent's work start time
+                                                slotEnd.compareTo(agentEnd) <= 0 && // Slot ends on or before agent's work end time
+                                                slotStart.compareTo(agentEnd) <= 0 // Slot starts before or on the agent's work end time
+                                            ) {
+                                                var agent = agentSchedule.agent;
+                                                var agentExists = false;
+
+                                                // Check if the agent is already in the slotAgents array
+                                                for (var a = 0; a < slotAgents.length; a++) {
+                                                    if (slotAgents[a] === agent) {
+                                                        agentExists = true;
+                                                        break;
+                                                    }
+                                                }
+
+                                                if (!agentExists) {
+                                                    slotAgents.push(agent); // Add the agent to the slotAgents array if not already present
+                                                }
+                                            }
+                                        }
+
+                                        for (var i = 0; i < personalOff.length; i++) {
+                                            var personalStart = new GlideDateTime(personalOff[i].start);
+                                            var personalEnd = new GlideDateTime(personalOff[i].end);
+
+                                            // Check if the personalOff event overlaps with the slot
+                                            if (
+                                                slotStart.compareTo(personalEnd) < 0 && // Slot starts before personalOff ends
+                                                slotEnd.compareTo(personalStart) > 0 // Slot ends after personalOff starts
+                                            ) {
+                                                var overlappingAgents = personalOff[i].agent.split(','); // Get the agents affected by the personalOff
+
+                                                for (var j = 0; j < overlappingAgents.length; j++) {
+                                                    var agent = overlappingAgents[j];
+
+                                                    // Check if the agent is in the slotAgents array
+                                                    for (var a = 0; a < slotAgents.length; a++) {
+                                                        if (slotAgents[a] === agent) {
+                                                            slotAgents.splice(a, 1); // Remove the agent from the slotAgents array
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Filter out agents without a schedule on the specific date
+                                        var filteredAgents = [];
+                                        for (var i = 0; i < slotAgents.length; i++) {
+                                            var agent = slotAgents[i];
+                                            var agentHasSchedule = false;
+
+                                            for (var j = 0; j < agentSchedules.length; j++) {
+                                                if (
+                                                    agentSchedules[j].agent === agent &&
+                                                    currentDate.getValue().split(' ')[0] >= agentSchedules[j].start.split(' ')[0] &&
+                                                    currentDate.getValue().split(' ')[0] <= agentSchedules[j].end.split(' ')[0]
+                                                ) {
+                                                    agentHasSchedule = true;
+                                                    break;
+                                                }
+                                            }
+
+                                            if (agentHasSchedule) {
+                                                filteredAgents.push(agent);
+                                            }
+                                        }
+
+                                        // Check if the slot matches any booked appointments
+                                        var matchingAppointments = bookedAppointments.filter(function(appointment) {
+                                            var appointmentStart = new GlideDateTime(appointment.start);
+                                            var appointmentEnd = new GlideDateTime(appointment.end);
+
+                                            return (
+                                                slotStart.equals(appointmentStart) && slotEnd.equals(appointmentEnd)
+                                            );
+                                        });
+
+                                        if (matchingAppointments.length > 0) {
+                                            filteredAgents.splice(0, matchingAppointments.length); // Remove agents based on the number of matching appointments
+                                        }
+
+                                        // Set the available agents for the slot
+                                        slot['Available Agents'] = filteredAgents.join(",");
+                                        slot['filteredAgentsCount'] = filteredAgents.length;
+
+                                        if (filteredAgents.length > 0) {
+                                            return slot;
+                                        } else {
+                                            return null; // Skip the slot if there are no available agents
+                                        }
+                                    }).filter(Boolean) // Remove any null slots
+                                });
+                            }
+
+                        }
+                        anyAppointmentsFound = true;
                     } else {
-                        // No available slots on the current date
-                        var errorMessage = 'No available slots on ' + currentDate.getValue().split(' ')[0];
+                        // No available agents, move to the next slot
+                        currentDate.addDaysLocalTime(1);
+                        continue;
                     }
+                } else {
+                    // No available slots on the current date
+                    var errorMessage = 'No available slots on ' + currentDate.getValue().split(' ')[0];
+                    currentDate.addDaysLocalTime(1); // Skip to the next day
+                    continue;
                 }
 
                 currentDate.addDaysLocalTime(1); // Increment the date for the next iteration
             }
+
+
             if (!anyAppointmentsFound) {
                 // No appointments available between the specified start and end dates
-                var errorMessagee = 'No appointments available between ' + startDate + ' and ' + endDate;
-                var errorObjecte = {
-                    message: errorMessagee,
+                var errorMessage = 'No appointments available between ' + startDate + ' and ' + endDate;
+                var errorObject = {
+                    message: errorMessage,
                     status: 403
                 };
                 response.setStatus(403);
-                return errorObjecte;
+                return errorObject;
             }
 
             var formattedResponse = {
                 result: appointmentList.map(function(appointment) {
+                    var filteredAgentsCount = 0; // Initialize filtered agents count for each appointment
+
+                    // Calculate the filtered agents count for the current appointment
+                    if (appointment.slots.length > 0) {
+                        filteredAgentsCount = appointment.slots.reduce(function(count, slot) {
+                            return count + slot['Available Agents'].split(",").length;
+                        }, 0);
+                    }
+
+                    // Update the filteredAgentsCount property for each slot in the appointment
+                    var updatedSlots = appointment.slots.map(function(slot) {
+                        var slotStartDateTime = new GlideDateTime(slot.startTime);
+                        var slotEndDateTime = new GlideDateTime(slot.endTime);
+
+                        // Convert slot start and end time to GMT
+                        slotStartDateTime.addSeconds(-offsetHours * 3600);
+                        slotEndDateTime.addSeconds(-offsetHours * 3600);
+
+                        // Format the slot start and end time in GMT
+                        var formattedStartTime = slotStartDateTime.getDisplayValue().replace(' ', 'T');
+                        var formattedEndTime = slotEndDateTime.getDisplayValue().replace(' ', 'T');
+
+                        // Calculate the filtered agents count for the slot
+                        var filteredAgentsCount = slot['Available Agents'].split(",").length;
+
+                        return {
+                            startTime: formattedStartTime,
+                            endTime: formattedEndTime,
+                            'Available Agents': slot['Available Agents'],
+                            //  filteredAgentsCount: filteredAgentsCount
+                        };
+                    });
                     return {
                         date: appointment.date,
                         appointmentType: appointment.appointmentType,
                         location: appointment.location,
-                        availableAgents: appointment.agent,
-                        slots: appointment.slots.map(function(slot) {
-                            return 'StartDateTime: ' + slot.startTime + ', EndDateTime: ' + slot.endTime;
-                        })
+                        slots: updatedSlots,
+                        message: "Slots were found",
+                        // filteredAgentsCount: filteredAgentsCount // Add the filtered agents count for the appointment
                     };
                 })
             };
+
             return formattedResponse;
         } else {
             var errAppointment = 'No appointment found in the system';
-            response.setStatus(400);
+            response.setStatus(403);
             return {
                 error: {
                     message: errAppointment
                 }
             };
         }
-
     },
+
+    isAgentAvailable: function(agent, startTime, endTime, personalOff) {
+        var startDateTime = new GlideDateTime(startTime);
+        var endDateTime = new GlideDateTime(endTime);
+
+        var isOnPersonalOff = personalOff.some(function(personal) {
+            var personalStart = new GlideDateTime(personal.start);
+            var personalEnd = new GlideDateTime(personal.end);
+
+            return (
+                personal.agent === agent &&
+                (startDateTime.compareTo(personalStart) >= 0 && endDateTime.compareTo(personalEnd) <= 0)
+            );
+        });
+
+        return !isOnPersonalOff;
+    },
+
     isHoliday: function(date, holidays) {
-        // Convert the date to the format used in the holidays array for comparison
         var glideDate = new GlideDate();
         glideDate.setValue(date.getDisplayValue().split(' ')[0]);
 
-        // Iterate over the holidays array and check if the current date is present
         for (var i = 0; i < holidays.length; i++) {
             var holiday = new GlideDate();
             holiday.setValue(holidays[i]);
 
             if (glideDate.equals(holiday)) {
-                return true; // The current date is a holiday
+                return true;
             }
         }
 
-        return false; // The current date is not a holiday
+        return false;
+    },
+    getBookedAppointments: function(territory, startDateTime, endDateTime, availableAppointments, offsetHours, day) {
+        var result = {
+            availableAppointments2HourSlots: [],
+            bookedAppointments: []
+        };
+        var territory_glide = new GlideRecord('sn_tp_territory');
+        territory_glide.addQuery('name', territory);
+        territory_glide.query();
+        if (territory_glide.next()) {
+            var territory_sys = territory_glide.getValue('sys_id');
+        }
+
+        var grAppointment = new GlideRecord('sn_apptmnt_booking_appointment_booking');
+        grAppointment.addQuery('start', '>=', startDateTime);
+        grAppointment.addQuery('end', '<=', endDateTime);
+        grAppointment.addQuery('u_territoory', territory_sys);
+        grAppointment.query();
+
+        var bookedAppointments = [];
+        while (grAppointment.next()) {
+            var state = grAppointment.getValue('state');
+            if (state == 'new' || state == "pending" || state == "ready") {
+                var appointmentStart = new GlideDateTime(grAppointment.start.getDisplayValue());
+                var appointmentEnd = new GlideDateTime(grAppointment.end.getDisplayValue());
+
+                var appointmentDuration = (appointmentEnd.getNumericValue() - appointmentStart.getNumericValue()) / (1000 * 60 * 60);
+                if (appointmentDuration === 2 && day === '4 Hours') {
+                    // Break the available appointments into 2-hour slots and store in a separate array
+                    var availableAppointments2HourSlots = [];
+                    for (var i = 0; i < availableAppointments.length; i++) {
+                        var slot = availableAppointments[i];
+                        var slotStartDateTime = new GlideDateTime(slot.startTime);
+                        var slotEndDateTime = new GlideDateTime(slot.endTime);
+                        var slotDuration = (slotEndDateTime.getNumericValue() - slotStartDateTime.getNumericValue()) / (1000 * 60 * 60);
+
+                        if (slotDuration === 4) {
+                            // Split the 4-hour slot into two 2-hour slots
+                            slotStartDateTime.addSeconds(-(offsetHours * 3600) / 2);
+                            slotEndDateTime.addSeconds(-(offsetHours * 3600) / 2);
+                            var splitDateTime = new GlideDateTime(slotStartDateTime);
+                            splitDateTime.addSeconds(2 * 60 * 60);
+
+                            availableAppointments2HourSlots.push({
+                                startTime: slotStartDateTime.getDisplayValue().replace(' ', 'T'),
+                                endTime: splitDateTime.getDisplayValue().replace(' ', 'T'),
+                                correspondingFourHourSlot: slot // Store the corresponding 4-hour slot in the 2-hour slot entry
+                            });
+
+                            availableAppointments2HourSlots.push({
+                                startTime: splitDateTime.getDisplayValue().replace(' ', 'T'),
+                                endTime: slotEndDateTime.getDisplayValue().replace(' ', 'T'),
+                                correspondingFourHourSlot: slot // Store the corresponding 4-hour slot in the 2-hour slot entry
+                            });
+                        } else {
+                            // For other appointment durations, add the appointment as it is
+                            availableAppointments2HourSlots.push({
+                                startTime: slot.startTime,
+                                endTime: slot.endTime
+                            });
+                        }
+                    }
+                    result.availableAppointments2HourSlots = availableAppointments2HourSlots;
+                }
+                if (appointmentDuration === 4 && day == '2 Hours') {
+                    // If the appointment duration is 4 hours, split it into two 2-hour appointments
+                    appointmentStart.addSeconds((-offsetHours * 3600) / 2);
+                    appointmentEnd.addSeconds((-offsetHours * 3600) / 2);
+                    var splitDateTime4 = new GlideDateTime(appointmentStart);
+                    splitDateTime4.addSeconds(appointmentDuration * 60 * 60 / 2);
+
+                    bookedAppointments.push({
+                        start: appointmentStart.getDisplayValue(),
+                        end: splitDateTime4.getDisplayValue()
+                    });
+
+                    bookedAppointments.push({
+                        start: splitDateTime4.getDisplayValue(),
+                        end: appointmentEnd.getDisplayValue()
+                    });
+                } else if (appointmentDuration === 8 && day == '2 Hours') {
+                    appointmentStart.addSeconds((-offsetHours * 3600) / 2);
+                    appointmentEnd.addSeconds((-offsetHours * 3600) / 2);
+                    // If the appointment duration is 8 hours, split it into four 2-hour slots
+                    var splitDateTime1 = new GlideDateTime(appointmentStart);
+                    var splitDateTime2 = new GlideDateTime(appointmentStart);
+                    var splitDateTime3 = new GlideDateTime(appointmentStart);
+
+                    splitDateTime1.addSeconds(2 * 60 * 60);
+                    splitDateTime2.addSeconds(4 * 60 * 60);
+                    splitDateTime3.addSeconds(6 * 60 * 60);
+
+                    bookedAppointments.push({
+                        start: appointmentStart.getDisplayValue(),
+                        end: splitDateTime1.getDisplayValue()
+                    });
+
+                    bookedAppointments.push({
+                        start: splitDateTime1.getDisplayValue(),
+                        end: splitDateTime2.getDisplayValue()
+                    });
+
+                    bookedAppointments.push({
+                        start: splitDateTime2.getDisplayValue(),
+                        end: splitDateTime3.getDisplayValue()
+                    });
+
+                    bookedAppointments.push({
+                        start: splitDateTime3.getDisplayValue(),
+                        end: appointmentEnd.getDisplayValue()
+                    });
+                } else {
+                    // For other appointment durations, add the appointment as it is
+                    appointmentStart.addSeconds((-offsetHours * 3600) / 2);
+                    appointmentEnd.addSeconds((-offsetHours * 3600) / 2);
+                    bookedAppointments.push({
+                        start: appointmentStart.getDisplayValue(),
+                        end: appointmentEnd.getDisplayValue()
+                    });
+                }
+            }
+        }
+        result.bookedAppointments = bookedAppointments;
+
+
+        return result;
+    },
+    matchAndRemoveCorresponding4HourSlots: function(availableAppointments2HourSlots, bookedAppointments, availableAppointments, offsetHours) {
+        for (var i = 0; i < availableAppointments2HourSlots.length; i++) {
+            var slot = availableAppointments2HourSlots[i];
+
+            // Check if the slot matches any booked appointments
+            var isBooked = bookedAppointments.some(function(appointment, index) {
+                var appointmentStart = new GlideDateTime(appointment.start);
+                var appointmentEnd = new GlideDateTime(appointment.end);
+
+                if (
+                    new GlideDateTime(slot.startTime).equals(appointmentStart) &&
+                    new GlideDateTime(slot.endTime).equals(appointmentEnd)
+                ) {
+                    // Remove the matched 2-hour appointment from bookedAppointments
+                    bookedAppointments.splice(index, 1);
+                    return true; // Return true to indicate a match was found
+                }
+            });
+
+            if (isBooked && slot.correspondingFourHourSlot) {
+                // If a 2-hour slot is matched, remove the corresponding 4-hour slot from available appointments
+                var correspondingFourHourSlot = slot.correspondingFourHourSlot;
+
+                for (var j = 0; j < availableAppointments.length; j++) {
+                    var fourHourSlot = availableAppointments[j];
+
+                    if (fourHourSlot.parameter === correspondingFourHourSlot.parameter) {
+                       
+                        // Add the 4-hour slot to booked appointments
+                        bookedAppointments.push(correspondingFourHourSlot);
+
+                        // Break the inner loop since we found the corresponding 4-hour slot
+                        break;
+                    }
+                }
+            }
+        }
+
+        return bookedAppointments; // Return the updated bookedAppointments array
     },
     type: 'appointmentApiUtil'
 };
-//request body
-{
-    "workType": "BFGPONFFANRIN",
-    "wireCenter": "Fort Collins",
-    "appointmentType": "full-day",
-    "appointment": {
-        "searchWindowEnd": "2023-06-30T17:00:00",
-        "searchWindowStart": "2023-06-15T07:00:00"
-    },
-    "jobLocation": {
-        "city": "MANTEO",
-        "state": "NC",
-        "street": "174 JONES CIR",
-        "country": "USA",
-        "zipCode": "27954",
-        "geoLocation": {
-            "latitude": 41.256451,
-            "longitude": -71.994717
-        }
-    }
-}
